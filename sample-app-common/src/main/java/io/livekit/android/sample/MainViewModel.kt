@@ -83,8 +83,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFERENCES_KEY_E2EE_KEY = "e2ee_key"
         private const val PREFERENCES_KEY_E2EE_ON_BOARD = "e2ee_on_board"
 
-        const val URL = BuildConfig.DEFAULT_URL
-        const val TOKEN = BuildConfig.DEFAULT_TOKEN
+        // EVT2: the URL and first token built into the app (Evt2Tokens.kt), when tools/make_token.py wrote them.
+        val URL = Evt2Tokens.URL.ifEmpty { BuildConfig.DEFAULT_URL }
+        val TOKEN = Evt2Tokens.TOKENS.firstOrNull()?.second ?: BuildConfig.DEFAULT_TOKEN
         const val TOKEN_SERVER_ID = BuildConfig.DEFAULT_TOKEN_SERVER_ID
         const val E2EE_KEY = "12345678"
     }

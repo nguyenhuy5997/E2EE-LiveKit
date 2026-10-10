@@ -47,3 +47,16 @@ py -3 tools/make_token.py --room evt2-test phone1 phone2
 ```
 
 Enter the project URL (`wss://<project>.livekit.cloud`) and a token per phone on the "URL & Token" tab.
+
+To build the URL and tokens into the app instead (the start screen then only asks "Máy 1 / Máy 2 / ..."; each phone
+picks a different one, LiveKit allows one connection per identity):
+
+```
+set LIVEKIT_URL=wss://<project>.livekit.cloud
+py -3 tools/make_token.py --room evt2-test --hours 8760 --write-app phone1 phone2 phone3 phone4
+gradlew :sample-app-compose:assembleDebug
+```
+
+This rewrites `sample-app-common/.../Evt2Tokens.kt` (committed as an empty placeholder). The tokens grant access to
+the room until they expire, so only commit them to a private repository, and rerun the command after changing the
+API key.

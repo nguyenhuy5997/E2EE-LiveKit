@@ -38,6 +38,7 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.MaterialTheme
+import androidx.compose.material.OutlinedButton
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.RadioButton
 import androidx.compose.material.Surface
@@ -58,6 +59,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import io.livekit.android.composesample.ui.theme.AppTheme
+import io.livekit.android.sample.Evt2Tokens
 import io.livekit.android.sample.MainViewModel
 import io.livekit.android.sample.common.R
 import io.livekit.android.sample.model.StressTest
@@ -85,6 +87,14 @@ class MainActivity : ComponentActivity() {
                 defaultE2eeOn = viewModel.getE2EEOptionsOn(),
                 defaultE2eeOnBoard = viewModel.getE2EEOnBoard(),
                 onConnect = { tokenSourceArgs, e2eeKey, e2eeOn, e2eeOnBoard, stressTest ->
+                    // EVT2: remember this phone's choices, so the next call is one tap.
+                    if (tokenSourceArgs is TokenSourceArgs.Literal) {
+                        viewModel.setSavedUrl(tokenSourceArgs.url)
+                        viewModel.setSavedToken(tokenSourceArgs.token)
+                    }
+                    viewModel.setSavedE2EEKey(e2eeKey)
+                    viewModel.setSavedE2EEOn(e2eeOn)
+                    viewModel.setE2EEOnBoard(e2eeOnBoard)
                     val intent = Intent(this@MainActivity, CallActivity::class.java).apply {
                         putExtra(
                             CallActivity.KEY_ARGS,
@@ -195,6 +205,27 @@ class MainActivity : ComponentActivity() {
                         }
                         when (tokenMode) {
                             TokenMode.Literal -> {
+                                // EVT2: tokens built into the app; each phone picks a different one.
+                                if (Evt2Tokens.TOKENS.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.height(20.dp))
+                                    Text("Máy này là (hai máy chọn khác nhau):", modifier = Modifier.fillMaxWidth())
+                                    Row(
+                                        horizontalArrangement = Arrangement.SpaceEvenly,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        Evt2Tokens.TOKENS.forEachIndexed { i, (_, phoneToken) ->
+                                            val pick = {
+                                                url = Evt2Tokens.URL
+                                                token = phoneToken
+                                            }
+                                            if (token == phoneToken) {
+                                                Button(onClick = pick) { Text("Máy ${i + 1}") }
+                                            } else {
+                                                OutlinedButton(onClick = pick) { Text("Máy ${i + 1}") }
+                                            }
+                                        }
+                                    }
+                                }
                                 Spacer(modifier = Modifier.height(20.dp))
                                 OutlinedTextField(
                                     value = url,
