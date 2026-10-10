@@ -41,13 +41,16 @@ import io.livekit.android.room.Room
 import io.livekit.android.room.datastream.StreamTextOptions
 import io.livekit.android.room.datastream.incoming.TextStreamReceiver
 import io.livekit.android.room.datatrack.RemoteDataTrack
+import io.livekit.android.room.participant.AudioTrackPublishDefaults
 import io.livekit.android.room.participant.LocalParticipant
 import io.livekit.android.room.participant.Participant
 import io.livekit.android.room.participant.RemoteParticipant
+import io.livekit.android.room.participant.VideoTrackPublishDefaults
 import io.livekit.android.room.track.CameraPosition
 import io.livekit.android.room.track.LocalScreencastVideoTrack
 import io.livekit.android.room.track.LocalVideoTrack
 import io.livekit.android.room.track.Track
+import io.livekit.android.room.track.VideoCodec
 import io.livekit.android.room.track.screencapture.ScreenCaptureParams
 import io.livekit.android.room.track.video.CameraCapturerUtils
 import io.livekit.android.rpc.RpcError
@@ -62,18 +65,21 @@ import io.livekit.android.token.TokenSourceResponse
 import io.livekit.android.token.cached
 import io.livekit.android.util.LKLog
 import io.livekit.android.util.flow
+import java.util.Collections
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import livekit.org.webrtc.CameraXHelper
-import java.util.Collections
 
 @OptIn(ExperimentalCamera2Interop::class)
 class CallViewModel(
@@ -83,10 +89,11 @@ class CallViewModel(
     val e2eeKey: String? = "",
     val audioProcessorOptions: AudioProcessorOptions? = null,
     val stressTest: StressTest = StressTest.None,
+    val mediaHooks: CallMediaHooks? = null,
 ) : AndroidViewModel(application) {
 
     private fun getE2EEOptions(): E2EEOptions? {
-        var e2eeOptions = if (e2ee && e2eeKey != null) {
+        var e2eeOptions = if (e2ee && e2eeKey != null && mediaHooks == null) {
             E2EEOptions(sharedKey = e2eeKey)
         } else {
             null
@@ -95,22 +102,46 @@ class CallViewModel(
     }
 
     private fun getRoomOptions(): RoomOptions {
-        return RoomOptions(
+        val options = RoomOptions(
             adaptiveStream = true,
             dynacast = true,
             e2eeOptions = getE2EEOptions(),
+            // EVT2 1-1 call baseline: H.264 (the codec of the board mode), one layer only, in every mode.
+            videoTrackPublishDefaults = VideoTrackPublishDefaults(
+                videoCodec = VideoCodec.H264.codecName,
+                simulcast = false,
+            ),
+            // No RED (redundant audio) in any mode: board-sealed audio is one opaque payload per packet, and all
+            // modes must send audio the same way to be compared.
+            audioTrackPublishDefaults = AudioTrackPublishDefaults(red = false),
         )
+        return mediaHooks?.roomOptions(options) ?: options
     }
+
+    private val baseOverrides = LiveKitOverrides(
+        audioOptions = AudioOptions(
+            audioProcessorOptions = audioProcessorOptions,
+        ),
+    )
 
     val room = LiveKit.create(
         appContext = application,
         options = getRoomOptions(),
-        overrides = LiveKitOverrides(
-            audioOptions = AudioOptions(
-                audioProcessorOptions = audioProcessorOptions,
-            ),
-        ),
+        overrides = mediaHooks?.overrides(baseOverrides) ?: baseOverrides,
     )
+
+    /** EVT2: this phone's E2EE mode, published as a participant attribute so a mismatch can be shown. */
+    private val e2eeMode = when {
+        mediaHooks != null -> E2EE_MODE_QRNG_SDCARD
+        getE2EEOptions() != null -> E2EE_MODE_APP
+        else -> E2EE_MODE_NONE
+    }
+    private val modeWarning = MutableStateFlow("")
+
+    /** Status line for the call screen: an E2EE mode mismatch first, else [mediaHooks]' status (empty if none). */
+    val mediaStatus: StateFlow<String> = combine(mediaHooks?.status ?: MutableStateFlow(""), modeWarning) { status, warning ->
+        warning.ifEmpty { status }
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, "")
 
     private var cameraProvider: CameraCapturerUtils.CameraProvider? = null
     val audioHandler = room.audioHandler as AudioSwitchHandler
@@ -199,6 +230,26 @@ class CallViewModel(
             // Collect any errors.
             launch {
                 error.collect { LKLog.e(it) }
+            }
+
+            // EVT2: warn when the peer chose another E2EE mode (the call cannot decrypt then).
+            launch {
+                room::remoteParticipants.flow.collectLatest { remotes ->
+                    val peer = remotes.values.firstOrNull()
+                    if (peer == null) {
+                        modeWarning.value = ""
+                        return@collectLatest
+                    }
+                    peer::attributes.flow.collect { attributes ->
+                        val peerMode = attributes[ATTR_E2EE_MODE]
+                        modeWarning.value = if (peerMode != null && peerMode != e2eeMode) {
+                            "Máy kia chọn \"${modeName(peerMode)}\", máy này \"${modeName(e2eeMode)}\": " +
+                                "hai máy phải chọn cùng chế độ E2EE"
+                        } else {
+                            ""
+                        }
+                    }
+                }
             }
 
             // Handle any changes in speakers.
@@ -302,11 +353,15 @@ class CallViewModel(
     private suspend fun connectToRoom() {
         try {
             room.e2eeOptions = getE2EEOptions()
+            mediaHooks?.beforeConnect(room)
             val connectionDetails = fetchConnectionDetails().getOrThrow()
             room.connect(
                 url = connectionDetails.serverUrl,
                 token = connectionDetails.participantToken,
             )
+            // Needs canUpdateOwnMetadata in the token (tools/make_token.py); without it the peer just sees no mode.
+            runCatching { room.localParticipant.updateAttributes(mapOf(ATTR_E2EE_MODE to e2eeMode)) }
+            mediaHooks?.beforePublish(room)
 
             mutableEnhancedNsEnabled.postValue(room.audioProcessorIsEnabled)
             mutableEnableAudioProcessor.postValue(true)
@@ -368,40 +423,37 @@ class CallViewModel(
         }
     }
 
+    private fun modeName(mode: String) = when (mode) {
+        E2EE_MODE_QRNG_SDCARD -> "Mã hóa qua QRNG-SDCARD"
+        E2EE_MODE_APP -> "Mã hóa qua App"
+        E2EE_MODE_NONE -> "không mã hóa"
+        else -> mode
+    }
+
+    /** Participant chosen by tapping its thumbnail; shown big until another is tapped or it leaves. */
+    @Volatile
+    private var pinnedParticipant: Participant? = null
+
+    /** Shows [participant] in the big view (thumbnail tap). */
+    fun pinParticipant(participant: Participant) {
+        pinnedParticipant = participant
+        mutablePrimarySpeaker.value = participant
+    }
+
+    // EVT2 1-1 call: the big view shows the participant pinned by a tap; otherwise the peer while one is in the room,
+    // and our own camera only while we are alone (the sample's speaker-following logic could leave our own camera
+    // big after connect).
+    @Suppress("UNUSED_PARAMETER")
     private fun handlePrimarySpeaker(participantsList: List<Participant>, speakers: List<Participant>, room: Room?) {
-        var speaker = mutablePrimarySpeaker.value
-
-        // If speaker is local participant (due to defaults),
-        // attempt to find another remote speaker to replace with.
-        if (speaker is LocalParticipant) {
-            val remoteSpeaker = participantsList
-                .filterIsInstance<RemoteParticipant>() // Try not to display local participant as speaker.
-                .firstOrNull()
-
-            if (remoteSpeaker != null) {
-                speaker = remoteSpeaker
-            }
+        val pinned = pinnedParticipant
+        if (pinned != null && (pinned == room?.localParticipant || room?.remoteParticipants?.values?.contains(pinned) == true)) {
+            mutablePrimarySpeaker.value = pinned
+            return
         }
-
-        // If previous primary speaker leaves
-        if (!participantsList.contains(speaker)) {
-            // Default to another person in room, or local participant.
-            speaker = participantsList.filterIsInstance<RemoteParticipant>()
-                .firstOrNull()
-                ?: room?.localParticipant
-        }
-
-        if (speakers.isNotEmpty() && !speakers.contains(speaker)) {
-            val remoteSpeaker = speakers
-                .filterIsInstance<RemoteParticipant>() // Try not to display local participant as speaker.
-                .firstOrNull()
-
-            if (remoteSpeaker != null) {
-                speaker = remoteSpeaker
-            }
-        }
-
-        mutablePrimarySpeaker.value = speaker
+        pinnedParticipant = null
+        mutablePrimarySpeaker.value = room?.remoteParticipants?.values?.firstOrNull()
+            ?: participantsList.filterIsInstance<RemoteParticipant>().firstOrNull()
+            ?: room?.localParticipant
     }
 
     /**
@@ -438,6 +490,7 @@ class CallViewModel(
         // Make sure to release any resources associated with LiveKit
         room.disconnect()
         room.release()
+        mediaHooks?.release()
 
         // Clean up foreground service
         val application = getApplication<Application>()
@@ -629,3 +682,9 @@ sealed class RpcRequestResult {
     data class Success(val response: String) : RpcRequestResult()
     data class Error(val code: Int?, val message: String) : RpcRequestResult()
 }
+
+/** EVT2: participant attribute carrying the E2EE mode chosen on the start screen. */
+private const val ATTR_E2EE_MODE = "evt2.e2ee"
+private const val E2EE_MODE_NONE = "none"
+private const val E2EE_MODE_APP = "app"
+private const val E2EE_MODE_QRNG_SDCARD = "qrng-sdcard"

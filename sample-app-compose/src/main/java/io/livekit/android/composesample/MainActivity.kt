@@ -32,11 +32,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
 import androidx.compose.material.MaterialTheme
 import androidx.compose.material.OutlinedTextField
+import androidx.compose.material.RadioButton
 import androidx.compose.material.Surface
 import androidx.compose.material.Switch
 import androidx.compose.material.Tab
@@ -51,6 +54,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import io.livekit.android.composesample.ui.theme.AppTheme
@@ -79,7 +83,8 @@ class MainActivity : ComponentActivity() {
                 defaultTokenServerId = viewModel.getSavedTokenServerId(),
                 defaultE2eeKey = viewModel.getSavedE2EEKey(),
                 defaultE2eeOn = viewModel.getE2EEOptionsOn(),
-                onConnect = { tokenSourceArgs, e2eeKey, e2eeOn, stressTest ->
+                defaultE2eeOnBoard = viewModel.getE2EEOnBoard(),
+                onConnect = { tokenSourceArgs, e2eeKey, e2eeOn, e2eeOnBoard, stressTest ->
                     val intent = Intent(this@MainActivity, CallActivity::class.java).apply {
                         putExtra(
                             CallActivity.KEY_ARGS,
@@ -88,17 +93,19 @@ class MainActivity : ComponentActivity() {
                                 e2eeKey,
                                 e2eeOn,
                                 stressTest,
+                                e2eeOnBoard,
                             ),
                         )
                     }
                     startActivity(intent)
                 },
-                onSave = { url, token, tokenServerId, e2eeKey, e2eeOn ->
+                onSave = { url, token, tokenServerId, e2eeKey, e2eeOn, e2eeOnBoard ->
                     viewModel.setSavedUrl(url)
                     viewModel.setSavedToken(token)
                     viewModel.setSavedTokenServerId(tokenServerId)
                     viewModel.setSavedE2EEKey(e2eeKey)
                     viewModel.setSavedE2EEOn(e2eeOn)
+                    viewModel.setE2EEOnBoard(e2eeOnBoard)
 
                     Toast.makeText(
                         this@MainActivity,
@@ -130,8 +137,9 @@ class MainActivity : ComponentActivity() {
         defaultTokenServerId: String = MainViewModel.TOKEN_SERVER_ID,
         defaultE2eeKey: String = MainViewModel.E2EE_KEY,
         defaultE2eeOn: Boolean = false,
-        onConnect: (tokenSourceArgs: TokenSourceArgs, e2eeKey: String, e2eeOn: Boolean, stressTest: StressTest) -> Unit = { _, _, _, _ -> },
-        onSave: (url: String, token: String, tokenServerId: String, e2eeKey: String, e2eeOn: Boolean) -> Unit = { _, _, _, _, _ -> },
+        defaultE2eeOnBoard: Boolean = true,
+        onConnect: (tokenSourceArgs: TokenSourceArgs, e2eeKey: String, e2eeOn: Boolean, e2eeOnBoard: Boolean, stressTest: StressTest) -> Unit = { _, _, _, _, _ -> },
+        onSave: (url: String, token: String, tokenServerId: String, e2eeKey: String, e2eeOn: Boolean, e2eeOnBoard: Boolean) -> Unit = { _, _, _, _, _, _ -> },
         onReset: () -> Unit = {},
     ) {
         AppTheme {
@@ -145,6 +153,7 @@ class MainActivity : ComponentActivity() {
             var agentName by remember { mutableStateOf("") }
             var e2eeKey by remember { mutableStateOf(defaultE2eeKey) }
             var e2eeOn by remember { mutableStateOf(defaultE2eeOn) }
+            var e2eeOnBoard by remember { mutableStateOf(defaultE2eeOnBoard) }
             var stressTest by remember { mutableStateOf(false) }
             var secondToken by remember { mutableStateOf(defaultSecondToken) }
             val scrollState = rememberScrollState()
@@ -241,17 +250,6 @@ class MainActivity : ComponentActivity() {
                             }
                         }
 
-                        if (e2eeOn) {
-                            Spacer(modifier = Modifier.height(20.dp))
-                            OutlinedTextField(
-                                value = e2eeKey,
-                                onValueChange = { e2eeKey = it },
-                                label = { Text("E2EE Key") },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = e2eeOn,
-                            )
-                        }
-
                         if (tokenMode == TokenMode.Literal && stressTest) {
                             Spacer(modifier = Modifier.height(20.dp))
                             OutlinedTextField(
@@ -269,11 +267,34 @@ class MainActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
-                            Text("Enable E2EE")
+                            Text("Bật E2EE (mã hóa đầu cuối)")
                             Switch(
                                 checked = e2eeOn,
                                 onCheckedChange = { e2eeOn = it },
                             )
+                        }
+
+                        // EVT2: where the end-to-end encryption runs. Both phones must choose the same mode.
+                        if (e2eeOn) {
+                            E2eeModeOption(
+                                text = "Mã hóa qua QRNG-SDCARD",
+                                selected = e2eeOnBoard,
+                                onSelect = { e2eeOnBoard = true },
+                            )
+                            E2eeModeOption(
+                                text = "Mã hóa qua App",
+                                selected = !e2eeOnBoard,
+                                onSelect = { e2eeOnBoard = false },
+                            )
+                            if (!e2eeOnBoard) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                OutlinedTextField(
+                                    value = e2eeKey,
+                                    onValueChange = { e2eeKey = it },
+                                    label = { Text("Khóa E2EE (giống nhau trên hai máy)") },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
                         }
 
                         if (tokenMode == TokenMode.Literal) {
@@ -300,7 +321,7 @@ class MainActivity : ComponentActivity() {
                                         } else {
                                             StressTest.None
                                         }
-                                        onConnect(TokenSourceArgs.Literal(url, token), e2eeKey, e2eeOn, stressTestCmd)
+                                        onConnect(TokenSourceArgs.Literal(url, token), e2eeKey, e2eeOn, e2eeOnBoard, stressTestCmd)
                                     }
 
                                     TokenMode.DevServer -> {
@@ -311,7 +332,7 @@ class MainActivity : ComponentActivity() {
                                             participantIdentity = participantIdentity.ifBlank { null },
                                             agentName = agentName.ifBlank { null },
                                         )
-                                        onConnect(devTokenServerArgs, e2eeKey, e2eeOn, StressTest.None)
+                                        onConnect(devTokenServerArgs, e2eeKey, e2eeOn, e2eeOnBoard, StressTest.None)
                                     }
                                 }
                             },
@@ -320,7 +341,7 @@ class MainActivity : ComponentActivity() {
                         }
 
                         Spacer(modifier = Modifier.height(20.dp))
-                        Button(onClick = { onSave(url, token, tokenServerId, e2eeKey, e2eeOn) }) {
+                        Button(onClick = { onSave(url, token, tokenServerId, e2eeKey, e2eeOn, e2eeOnBoard) }) {
                             Text("Save Values")
                         }
 
@@ -341,3 +362,20 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
+/** One choice of where E2EE runs (a radio button row). */
+@Composable
+private fun E2eeModeOption(text: String, selected: Boolean, onSelect: () -> Unit) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(selected = selected, onClick = onSelect, role = Role.RadioButton)
+            .padding(vertical = 4.dp),
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(text)
+    }
+}
+

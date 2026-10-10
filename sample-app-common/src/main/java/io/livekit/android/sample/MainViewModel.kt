@@ -32,6 +32,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun getE2EEOptionsOn() = preferences.getBoolean(PREFERENCES_KEY_E2EE_ON, false)
     fun getSavedE2EEKey() = preferences.getString(PREFERENCES_KEY_E2EE_KEY, E2EE_KEY) as String
 
+    /** EVT2: when E2EE is on, true = encrypted by the USB board, false = LiveKit's software E2EE. */
+    fun getE2EEOnBoard() = preferences.getBoolean(PREFERENCES_KEY_E2EE_ON_BOARD, true)
+
+    fun setE2EEOnBoard(onBoard: Boolean) {
+        preferences.edit {
+            putBoolean(PREFERENCES_KEY_E2EE_ON_BOARD, onBoard)
+        }
+    }
+
     fun setSavedUrl(url: String) {
         preferences.edit {
             putString(PREFERENCES_KEY_URL, url)
@@ -72,6 +81,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         private const val PREFERENCES_KEY_TOKEN_SERVER_ID = "token_server_id"
         private const val PREFERENCES_KEY_E2EE_ON = "enable_e2ee"
         private const val PREFERENCES_KEY_E2EE_KEY = "e2ee_key"
+        private const val PREFERENCES_KEY_E2EE_ON_BOARD = "e2ee_on_board"
 
         const val URL = BuildConfig.DEFAULT_URL
         const val TOKEN = BuildConfig.DEFAULT_TOKEN

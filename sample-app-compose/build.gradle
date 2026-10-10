@@ -9,11 +9,14 @@ android {
     compileSdkVersion androidSdk.compileVersion
 
     defaultConfig {
-        applicationId "io.livekit.android.composesample"
-        minSdkVersion androidSdk.minVersion
+        applicationId "com.evt2.livekit"
+        minSdkVersion 26 // evt2-board (USB host, E2EE-App's minimum)
         targetSdkVersion androidSdk.targetVersion
         versionCode 1
         versionName "1.0"
+        ndk {
+            abiFilters 'arm64-v8a' // evt2-board's native audio crypto is arm64 only
+        }
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -55,6 +58,8 @@ dependencies {
     // Sample-app-common contains the livekit-android-sdk dependency and others
     // as well as classes common to both sample apps.
     implementation project(":sample-app-common")
+    // EVT2: "E2EE on the board" mode (chosen on the start screen, next to no E2EE and LiveKit's software E2EE)
+    implementation project(":evt2-board")
 
     implementation fileTree(dir: 'libs', include: ['*.jar'])
     implementation "org.jetbrains.kotlin:kotlin-stdlib-jdk7:$kotlin_version"

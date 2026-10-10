@@ -77,8 +77,9 @@ dependencies {
     api libs.androidx.lifecycle.process
     api libs.protobuf.javalite
     api libs.androidx.preference.ktx
-    // debugImplementation because LeakCanary should only run in debug builds.
-    debugImplementation libs.leakcanary.android
+    // EVT2: LeakCanary 2.8.1 crashes with the current androidx.lifecycle (AbstractMethodError in
+    // ViewModelProvider.Factory.create) and its heap dumps would disturb call measurements.
+    // debugImplementation libs.leakcanary.android
 
     testImplementation libs.junit
     androidTestImplementation libs.androidx.test.core

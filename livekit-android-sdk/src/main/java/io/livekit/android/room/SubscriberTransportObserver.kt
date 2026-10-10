@@ -57,6 +57,7 @@ class SubscriberTransportObserver(
     }
 
     override fun onAddTrack(receiver: RtpReceiver, streams: Array<out MediaStream>) {
+        receiver.track()?.let { io.livekit.android.evt2.Evt2RtpHooks.receiverCreated(it, receiver) }
         executeOnRTCThread(rtcThreadToken) {
             val track = receiver.track() ?: return@executeOnRTCThread
             LKLog.v { "onAddTrack: ${track.kind()}, ${track.id()}, ${streams.fold("") { sum, it -> "$sum, $it" }}" }

@@ -466,7 +466,9 @@ internal constructor(
         val sessionState = signalSessionState
         val publisher = publisher ?: return null
         val transceiver = publisher.withPeerConnection {
-            addTransceiver(rtcTrack, transInit)
+            addTransceiver(rtcTrack, transInit)?.also {
+                io.livekit.android.evt2.Evt2RtpHooks.senderCreated(rtcTrack, it.sender)
+            }
         } ?: return null
         return SenderTransceiverHandle(publisher, transceiver, sessionState)
     }

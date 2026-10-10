@@ -1,0 +1,51 @@
+plugins {
+    id 'com.android.library'
+    id 'kotlin-android'
+}
+
+// EVT2 board link: USB link to the encryption board, CA handshake over LiveKit text streams, and the board-backed
+// media crypto (video inside the H.264 codec wrappers, audio through a native FrameEncryptor/FrameDecryptor).
+// Code taken from E2EE-App (com.evt2.call.link / com.evt2.call.rtc), retargeted at LiveKit's livekit.org.webrtc.
+android {
+    namespace "com.evt2.board"
+    compileSdk androidSdk.compileVersion
+
+    defaultConfig {
+        // DeviceLink's USB host code and ContextCompat receivers need API 26 (E2EE-App's minSdk).
+        minSdk 26
+        targetSdk androidSdk.targetVersion
+        consumerProguardFiles 'consumer-rules.pro'
+        ndk {
+            // board_audio_crypto.cpp mirrors libwebrtc's arm64 ABI (relative vtables); only that ABI is checked.
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility java_version
+        targetCompatibility java_version
+    }
+    kotlinOptions {
+        jvmTarget = java_version
+    }
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    api project(":livekit-android-sdk")
+    implementation libs.androidx.core.ktx
+    implementation libs.coroutines.lib
+    implementation 'com.github.mik3y:usb-serial-for-android:3.9.0'
+
+    testImplementation libs.junit
+    testImplementation 'org.json:json:20240303'
+}

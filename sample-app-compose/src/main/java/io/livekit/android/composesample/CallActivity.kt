@@ -26,7 +26,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -86,12 +88,14 @@ class CallActivity : AppCompatActivity() {
     private val viewModel: CallViewModel by viewModelByFactory {
         val args = intent.getParcelableExtra<BundleArgs>(KEY_ARGS)
             ?: throw NullPointerException("args is null!")
+        val onBoard = args.e2eeOn && args.e2eeOnBoard
         CallViewModel(
             tokenSourceArgs = args.tokenSourceArgs,
-            e2ee = args.e2eeOn,
+            e2ee = args.e2eeOn && !onBoard, // LiveKit's software E2EE
             e2eeKey = args.e2eeKey,
             stressTest = args.stressTest,
             application = application,
+            mediaHooks = if (onBoard) createBoardMediaHooks(application) else null,
         )
     }
 
@@ -123,6 +127,8 @@ class CallActivity : AppCompatActivity() {
             val videoEnabled by viewModel.cameraEnabled.collectAsState(true)
             val screencastEnabled by viewModel.screenshareEnabled.collectAsState(false)
             val permissionAllowed by viewModel.permissionAllowed.collectAsState()
+            val mediaStatus by viewModel.mediaStatus.collectAsState()
+            Box(modifier = Modifier.fillMaxSize()) {
             Content(
                 room,
                 participants,
@@ -141,6 +147,20 @@ class CallActivity : AppCompatActivity() {
                 fullReconnect = { viewModel.reconnect() },
                 onUpdateAttribute = { k, v -> viewModel.updateAttribute(k, v) },
             )
+            // EVT2: board / CA handshake status, or an E2EE mode mismatch (empty otherwise).
+            if (mediaStatus.isNotEmpty()) {
+                Text(
+                    text = mediaStatus,
+                    color = Color.White,
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .safeDrawingPadding()
+                        .padding(8.dp)
+                        .background(Color(0xAA000000))
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+            }
         }
     }
 
@@ -243,14 +263,25 @@ class CallActivity : AppCompatActivity() {
                             count = participants.size,
                             key = { index -> participants[index].sid.value },
                         ) { index ->
-                            ParticipantItem(
-                                room = room,
-                                participant = participants[index],
-                                isSpeaking = activeSpeakers.contains(participants[index]),
+                            Box(
                                 modifier = Modifier
                                     .fillMaxHeight()
                                     .aspectRatio(1.0f, true),
-                            )
+                            ) {
+                                ParticipantItem(
+                                    room = room,
+                                    participant = participants[index],
+                                    isSpeaking = activeSpeakers.contains(participants[index]),
+                                    modifier = Modifier.fillMaxSize(),
+                                )
+                                // EVT2: tap a thumbnail to show it big. A transparent layer on top, because the video
+                                // view inside the item is a native view that may take the touch itself.
+                                Box(
+                                    modifier = Modifier
+                                        .matchParentSize()
+                                        .clickable { viewModel.pinParticipant(participants[index]) },
+                                )
+                            }
                         }
                     }
                 }
@@ -515,5 +546,7 @@ class CallActivity : AppCompatActivity() {
         val e2eeKey: String,
         val e2eeOn: Boolean,
         val stressTest: StressTest,
+        /** With [e2eeOn]: true = encrypted by the USB board, false = LiveKit's software E2EE. */
+        val e2eeOnBoard: Boolean = false,
     ) : Parcelable
 }
