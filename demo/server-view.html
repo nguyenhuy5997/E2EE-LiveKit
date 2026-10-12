@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Server đang nghe lén — EVT2 demo</title>
+<!--
+  Demo scene 1: what a compromised SFU / malicious operator sees.
+  Joins the LiveKit room with a HIDDEN, listen-only token (tools/make_token.py --role spy), so the two callers never
+  see it, and renders every track it receives. With E2EE off the call is clear; with "Mã hóa qua App" or
+  "Mã hóa qua QRNG-SDCARD" the media the server forwards is ciphertext, so the video is garbled and the audio is noise.
+-->
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #141922; --line: #243041; --text: #e6edf3; --muted: #8b98a9;
+    --accent: #ff4d4f; --ok: #27c93f;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { background: var(--accent); color: #fff; padding: 10px 16px; display: flex;
+    align-items: center; gap: 12px; flex-wrap: wrap; }
+  header .dot { width: 12px; height: 12px; border-radius: 50%; background: #fff; animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; }
+  header .sub { font-size: 13px; opacity: .9; }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px; background: var(--panel);
+    border-bottom: 1px solid var(--line); align-items: center; }
+  input { background: #0e131b; border: 1px solid var(--line); color: var(--text); border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; }
+  input#url { width: 280px; } input#token { flex: 1; min-width: 220px; } input#room { width: 130px; }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 9px 16px;
+    font-size: 14px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: #0e131b; border: 1px solid var(--line); color: var(--text); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { padding: 8px 16px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
+  #grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; padding: 16px; }
+  .tile { background: #000; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; position: relative; }
+  .tile video { width: 100%; display: block; background: #000; aspect-ratio: 16/10; object-fit: cover; }
+  .tile .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 10px;
+    background: linear-gradient(transparent, rgba(0,0,0,.85)); font-size: 13px; }
+  .tile .who { font-weight: 600; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;
+    vertical-align: middle; margin-left: 6px; }
+  .tag.clear { background: var(--ok); color: #04210a; }
+  .tag.enc { background: var(--accent); color: #2a0708; }
+  .empty { color: var(--muted); padding: 40px 16px; text-align: center; }
+</style>
+</head>
+<body>
+<header>
+  <span class="dot"></span>
+  <h1>SERVER / TRUNG GIAN ĐANG NGHE LÉN</h1>
+  <span class="sub">tham gia ẩn, chỉ nghe — hai bên gọi không hề thấy</span>
+</header>
+
+<div class="bar">
+  <input id="url" placeholder="wss://...livekit.cloud">
+  <input id="token" placeholder="Token spy (make_token.py --role spy)">
+  <input id="room" value="evt2-test">
+  <button id="go">Vào phòng nghe lén</button>
+  <button id="stop" class="ghost" disabled>Rời phòng</button>
+  <button id="sound" class="ghost" disabled>🔇 Bật tiếng</button>
+</div>
+
+<div id="status">Chưa kết nối. Dán token spy rồi bấm "Vào phòng nghe lén".</div>
+<div id="grid"><div class="empty">Chưa có luồng nào.</div></div>
+
+<script>
+const { Room, RoomEvent, Track } = LivekitClient;
+const $ = (id) => document.getElementById(id);
+const grid = $("grid");
+let room = null;
+let muted = true;
+
+// Prefill from the URL hash for quick demo setup: server-view.html#url=...&token=...
+(function prefill() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("url")) $("url").value = h.get("url");
+  if (h.get("token")) $("token").value = h.get("token");
+  if (h.get("room")) $("room").value = h.get("room");
+})();
+
+function status(text, color) {
+  const s = $("status");
+  s.textContent = text;
+  s.style.color = color || "var(--muted)";
+}
+
+function tileId(p, pub) { return `t_${p.identity}_${pub.trackSid}`; }
+
+function encryptionTag(pub) {
+  // What the SERVER believes about this track. Software E2EE marks it GCM; the board encrypts the payload opaquely,
+  // so the server still thinks it is "NONE" even though the content is unreadable.
+  let enc = "NONE";
+  try { if (pub.encryptionType && pub.encryptionType !== 0) enc = "GCM"; } catch (e) {}
+  const clear = enc === "NONE";
+  // NONE could be a truly-plaintext call OR a board-encrypted one; the eye decides from the picture.
+  return `<span class="tag ${clear ? "clear" : "enc"}">server đọc mã hóa: ${enc}</span>`;
+}
+
+function addTrack(track, pub, participant) {
+  if (track.kind === Track.Kind.Video) {
+    let tile = $(tileId(participant, pub));
+    if (!tile) {
+      tile = document.createElement("div");
+      tile.className = "tile";
+      tile.id = tileId(participant, pub);
+      const el = track.attach();
+      el.autoplay = true; el.playsInline = true; el.muted = true;
+      const cap = document.createElement("div");
+      cap.className = "cap";
+      cap.innerHTML = `<span class="who">${participant.identity}</span> ${encryptionTag(pub)}`;
+      tile.appendChild(el);
+      tile.appendChild(cap);
+      if (grid.querySelector(".empty")) grid.innerHTML = "";
+      grid.appendChild(tile);
+    }
+  } else if (track.kind === Track.Kind.Audio) {
+    const el = track.attach();
+    el.autoplay = true;
+    el.muted = muted;
+    el.id = `a_${participant.identity}_${pub.trackSid}`;
+    el.style.display = "none";
+    document.body.appendChild(el);
+  }
+}
+
+function removeTile(pub, participant) {
+  const v = $(tileId(participant, pub));
+  if (v) v.remove();
+  const a = document.getElementById(`a_${participant.identity}_${pub.trackSid}`);
+  if (a) a.remove();
+  if (!grid.children.length) grid.innerHTML = '<div class="empty">Chưa có luồng nào.</div>';
+}
+
+async function connect() {
+  const url = $("url").value.trim();
+  const token = $("token").value.trim();
+  if (!url || !token) { status("Thiếu URL hoặc token.", "var(--accent)"); return; }
+  room = new Room({ adaptiveStream: false, dynacast: false });
+  room
+    .on(RoomEvent.TrackSubscribed, (track, pub, p) => {
+      addTrack(track, pub, p);
+      status(`Đang nghe lén: ${room.remoteParticipants.size} máy trong phòng.`, "var(--ok)");
+    })
+    .on(RoomEvent.TrackUnsubscribed, (track, pub, p) => removeTile(pub, p))
+    .on(RoomEvent.Disconnected, () => status("Đã rời phòng."));
+  try {
+    status("Đang vào phòng...");
+    await room.connect(url, token);
+    status(`Đã vào phòng "${$("room").value}" (ẩn). Đang chờ luồng...`, "var(--ok)");
+    $("go").disabled = true; $("stop").disabled = false; $("sound").disabled = false;
+  } catch (e) {
+    status("Lỗi: " + (e && e.message ? e.message : e), "var(--accent)");
+    room = null;
+  }
+}
+
+async function disconnect() {
+  if (room) { await room.disconnect(); room = null; }
+  grid.innerHTML = '<div class="empty">Chưa có luồng nào.</div>';
+  document.querySelectorAll('audio[id^="a_"]').forEach((a) => a.remove());
+  $("go").disabled = false; $("stop").disabled = true; $("sound").disabled = true;
+}
+
+$("go").onclick = connect;
+$("stop").onclick = disconnect;
+$("sound").onclick = () => {
+  muted = !muted;
+  document.querySelectorAll('audio[id^="a_"]').forEach((a) => (a.muted = muted));
+  $("sound").textContent = muted ? "🔇 Bật tiếng" : "🔊 Tắt tiếng";
+};
+</script>
+</body>
+</html>

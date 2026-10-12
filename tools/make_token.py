@@ -35,16 +35,22 @@ def b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
 
 
-def make_token(api_key: str, api_secret: str, identity: str, room: str, ttl_s: int) -> str:
+def make_token(api_key: str, api_secret: str, identity: str, room: str, ttl_s: int, role: str = "phone") -> str:
     now = int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
-    claims = {
-        "iss": api_key,
-        "sub": identity,
-        "name": identity,
-        "nbf": now - 10,
-        "exp": now + ttl_s,
-        "video": {
+    if role == "spy":
+        # The eavesdropper of demo scene 1: joins hidden (the two callers do not see it), listens only. It receives
+        # the media the SFU forwards, so with E2EE off it sees/hears the call, and with board or app E2EE only noise.
+        grant = {
+            "room": room,
+            "roomJoin": True,
+            "canPublish": False,
+            "canSubscribe": True,
+            "canPublishData": False,
+            "hidden": True,
+        }
+    else:
+        grant = {
             "room": room,
             "roomJoin": True,
             "canPublish": True,
@@ -52,7 +58,14 @@ def make_token(api_key: str, api_secret: str, identity: str, room: str, ttl_s: i
             "canPublishData": True,
             # the app publishes its E2EE mode as a participant attribute (mode mismatch warning)
             "canUpdateOwnMetadata": True,
-        },
+        }
+    claims = {
+        "iss": api_key,
+        "sub": identity,
+        "name": identity,
+        "nbf": now - 10,
+        "exp": now + ttl_s,
+        "video": grant,
     }
     signing_input = (b64url(json.dumps(header, separators=(",", ":")).encode())
                      + "." + b64url(json.dumps(claims, separators=(",", ":")).encode()))
@@ -65,6 +78,8 @@ def main() -> int:
     ap.add_argument("identities", nargs="+", help="participant identities, one token each")
     ap.add_argument("--room", default="evt2-test")
     ap.add_argument("--hours", type=float, default=24.0)
+    ap.add_argument("--role", choices=["phone", "spy"], default="phone",
+                    help="'phone' = full call participant; 'spy' = demo scene 1 eavesdropper (hidden, listen only)")
     ap.add_argument("--write-app", action="store_true", help="also write the tokens + LIVEKIT_URL into Evt2Tokens.kt")
     args = ap.parse_args()
 
@@ -75,7 +90,8 @@ def main() -> int:
         return 1
 
     ttl_s = int(args.hours * 3600)
-    tokens = [(identity, make_token(api_key, api_secret, identity, args.room, ttl_s)) for identity in args.identities]
+    tokens = [(identity, make_token(api_key, api_secret, identity, args.room, ttl_s, args.role))
+              for identity in args.identities]
     for identity, token in tokens:
         print(f"{identity}: {token}")
 
